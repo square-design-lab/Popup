@@ -92,13 +92,52 @@ if (!window.sdlPopup) {
             safe(() => Sqs.initializeNativeVideo && Sqs.initializeNativeVideo(Y, node));
             safe(() => Sqs.initializeSummaryV2Block && Sqs.initializeSummaryV2Block(Y, node));
             safe(() => Sqs.initializeCommentLink && Sqs.initializeCommentLink(Y, node));
-            safe(() => Sqs.initializeFormBlocks && Sqs.initializeFormBlocks(Y, node));
             safe(() => Sqs.initializeParallax && Sqs.initializeParallax(Y, node));
           }
+          reinitializeForms(el);
           loadImages(el);
           safe(() => window.dispatchEvent(new Event("resize")));
           requestAnimationFrame(() => resolve());
         });
+      }
+
+      /* (Re)initialize Squarespace Form Blocks inside a container.
+         Needed because the page's form controller only runs once on load and
+         never sees AJAX-injected forms. Tries the documented Squarespace
+         initializers, then falls back to the YUI form-rendering utility, and
+         finally re-executes any inline form bootstrap scripts. All guarded. */
+      function reinitializeForms(scope) {
+        if (!scope) return;
+        const Y = window.Y;
+        const Sqs = window.Squarespace;
+        const forms = scope.querySelectorAll(".form-block, .sqs-block-form");
+        if (!forms.length || !Y) return;
+
+        const node = Y.one ? Y.one(scope) : null;
+
+        // 1) Squarespace's own initializer(s) — method name varies by version.
+        if (Sqs && node) {
+          ["initializeFormBlocks", "initializeForms"].forEach(name => {
+            if (typeof Sqs[name] === "function") safe(() => Sqs[name](Y, node));
+          });
+        }
+
+        // 2) YUI form-rendering utility fallback (older / classic forms).
+        safe(() =>
+          Y.use && Y.use("squarespace-form-rendering-utils", function (Yi) {
+            const FRU = Yi.Squarespace && Yi.Squarespace.FormRenderingUtils;
+            if (!FRU) return;
+            forms.forEach(block => {
+              const b = Yi.one(block);
+              if (!b) return;
+              safe(() => FRU.renderForm && FRU.renderForm(b));
+              safe(() => FRU.initializePostFormSubmit && FRU.initializePostFormSubmit(b));
+            });
+          })
+        );
+
+        // 3) Re-execute any inline bootstrap scripts the form ships with.
+        forms.forEach(block => executeScripts(block));
       }
 
       /* Re-init any registered SDL plugins (optional global registry). */
@@ -130,6 +169,7 @@ if (!window.sdlPopup) {
         deepMerge: existing.deepMerge || deepMerge,
         getFragment: existing.getFragment || getFragment,
         reloadSquarespaceLifecycle: existing.reloadSquarespaceLifecycle || reloadSquarespaceLifecycle,
+        reinitializeForms: existing.reinitializeForms || reinitializeForms,
         initializeAllPlugins: existing.initializeAllPlugins || initializeAllPlugins,
         initializeCodeBlocks: existing.initializeCodeBlocks || initializeCodeBlocks,
         initializeEmbedBlocks: existing.initializeEmbedBlocks || initializeEmbedBlocks,
@@ -477,6 +517,10 @@ if (!window.sdlPopup) {
       if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeSummaryV2Block) {
         Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
       }
+      // Re-wire form blocks now that the content lives in its final location
+      // in the popup (forms initialized in the temp container don't survive
+      // being moved — especially reCAPTCHA).
+      sdl$.reinitializeForms(content);
       playSingleVideo();
 
       emitEvent("sdlPopup:afterOpenPopup", { url, selector, el: overlay });
