@@ -466,19 +466,21 @@ When `preloadContent: true`, an additional hidden element is appended to `#siteW
 
 ## Dependencies
 
-The plugin depends on the `sdl$` utility library, which must be loaded before `plugin.js`. Required methods:
+**No external dependency.** The `sdl$` utility library is now **bundled inside `popup.js`** — there is nothing extra to load. (If a real `sdl$` is already present on the page from another SDL plugin, its methods are reused; anything missing falls back to the bundled implementations.) The bundled methods are:
 
 | Method | Purpose |
 |---|---|
 | `sdl$.deepMerge(target, ...sources)` | Deep-merges settings objects |
-| `sdl$.getFragment(url, selector)` | Fetches a page and returns a queried fragment |
-| `sdl$.initializeAllPlugins()` | Initializes all registered SDL plugins |
-| `sdl$.reloadSquarespaceLifecycle(el)` | Runs Squarespace block lifecycle on a container |
-| `sdl$.initializeCodeBlocks(el)` | *(optional)* Initializes code blocks |
-| `sdl$.initializeEmbedBlocks(el)` | *(optional)* Initializes embed/script blocks |
-| `sdl$.initializeThirdPartyPlugins(el)` | *(optional)* Initializes third-party plugins |
+| `sdl$.getFragment(url, selector)` | `fetch` + `DOMParser` + `document.importNode` of the matched fragment |
+| `sdl$.initializeAllPlugins()` | Runs any functions in the optional `sdl$.registeredPlugins` array |
+| `sdl$.reloadSquarespaceLifecycle(el)` | Runs Squarespace block lifecycle on a container (guarded; resolves a Promise) |
+| `sdl$.initializeCodeBlocks(el)` | Re-executes scripts inside `.sqs-block-code` / `.code-block` |
+| `sdl$.initializeEmbedBlocks(el)` | Re-executes embed scripts + nudges Instagram / Twitter / Facebook SDKs |
+| `sdl$.initializeThirdPartyPlugins(el)` | Re-executes remaining inline scripts + emits `sdl:contentReady` |
 
-Also relies on standard Squarespace globals:
+> Script re-execution is idempotent (each `<script>` is flagged once re-run) and only fires when the content is connected to the live DOM — which is why fetched content is temporarily mounted into the last page section during initialization.
+
+It still relies on standard Squarespace runtime globals that exist on every live site (all calls are existence-guarded):
 - `Squarespace.initializeSummaryV2Block(Y, node)`
 - `Squarespace.initializeLayoutBlocks(Y, node)`
 - `window.ImageLoader` or `window.Squarespace.ImageLoader`

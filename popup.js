@@ -11,6 +11,136 @@ if (!window.sdlPopup) {
   window.sdlPopup = (function () {
     "use strict";
 
+    /* ====================================================================
+       sdl$ — bundled utility library (no external dependency required).
+       Everything the plugin needs to run on Squarespace lives in this file.
+
+       If a real sdl$ is already on the page (e.g. another SDL plugin loaded
+       it first), its methods are reused; anything missing falls back to the
+       implementations below.
+    ==================================================================== */
+    const sdl$ = (function () {
+      const existing = window.sdl$ || {};
+
+      const safe = fn => {
+        try { return fn(); }
+        catch (e) { console.warn("[sdlPopup] util error:", e); }
+      };
+
+      const isPlainObject = v =>
+        v && typeof v === "object" && !Array.isArray(v) &&
+        (v.constructor === Object || Object.getPrototypeOf(v) === null);
+
+      /* Recursive deep-merge of plain objects (arrays / primitives overwrite). */
+      function deepMerge(target, ...sources) {
+        sources.forEach(source => {
+          if (!isPlainObject(source)) return;
+          Object.keys(source).forEach(key => {
+            const value = source[key];
+            if (isPlainObject(value)) {
+              if (!isPlainObject(target[key])) target[key] = {};
+              deepMerge(target[key], value);
+            } else {
+              target[key] = value;
+            }
+          });
+        });
+        return target;
+      }
+
+      /* Fetch a page and return a deep-imported copy of the matched fragment. */
+      async function getFragment(url, selector) {
+        const response = await fetch(url, { credentials: "same-origin" });
+        if (!response.ok) throw new Error(`Fetch failed for "${url}" (${response.status})`);
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const found = selector ? doc.querySelector(selector) : doc.body;
+        if (!found) throw new Error(`Selector "${selector}" not found at "${url}"`);
+        return document.importNode(found, true);
+      }
+
+      /* Re-execute <script> tags — parsed/imported markup never runs scripts.
+         Idempotent: each script is flagged once it has been re-run. */
+      function executeScripts(container) {
+        if (!container) return;
+        container.querySelectorAll("script:not([data-sdl-ran])").forEach(old => {
+          const script = document.createElement("script");
+          Array.from(old.attributes).forEach(a => script.setAttribute(a.name, a.value));
+          script.textContent = old.textContent;
+          script.setAttribute("data-sdl-ran", "");
+          old.parentNode.replaceChild(script, old);
+        });
+      }
+
+      /* Trigger Squarespace's responsive ImageLoader on lazy images. */
+      function loadImages(el) {
+        const imageLoader = window.ImageLoader || window.Squarespace?.ImageLoader;
+        if (!imageLoader || typeof imageLoader.load !== "function") return;
+        (el || document).querySelectorAll("img[data-src]").forEach(img =>
+          safe(() => imageLoader.load(img, { load: true }))
+        );
+      }
+
+      /* Run Squarespace's block lifecycle on a freshly inserted container. */
+      function reloadSquarespaceLifecycle(el) {
+        return new Promise(resolve => {
+          const Sqs = window.Squarespace;
+          const Y = window.Y;
+          const node = Sqs && Y && Y.one ? Y.one(el) : null;
+          if (Sqs && node) {
+            safe(() => Sqs.initializeLayoutBlocks && Sqs.initializeLayoutBlocks(Y, node));
+            safe(() => Sqs.initializeNativeVideo && Sqs.initializeNativeVideo(Y, node));
+            safe(() => Sqs.initializeSummaryV2Block && Sqs.initializeSummaryV2Block(Y, node));
+            safe(() => Sqs.initializeCommentLink && Sqs.initializeCommentLink(Y, node));
+            safe(() => Sqs.initializeFormBlocks && Sqs.initializeFormBlocks(Y, node));
+            safe(() => Sqs.initializeParallax && Sqs.initializeParallax(Y, node));
+          }
+          loadImages(el);
+          safe(() => window.dispatchEvent(new Event("resize")));
+          requestAnimationFrame(() => resolve());
+        });
+      }
+
+      /* Re-init any registered SDL plugins (optional global registry). */
+      function initializeAllPlugins() {
+        const registry = (window.sdl$ && window.sdl$.registeredPlugins) || [];
+        registry.forEach(fn => safe(() => typeof fn === "function" && fn()));
+      }
+
+      /* Code blocks: re-execute their embedded scripts. */
+      async function initializeCodeBlocks(el) {
+        el.querySelectorAll(".sqs-block-code, .code-block").forEach(b => executeScripts(b));
+      }
+
+      /* Embed blocks: re-execute scripts + nudge common social SDKs. */
+      async function initializeEmbedBlocks(el) {
+        el.querySelectorAll(".sqs-block-embed, .embed-block").forEach(b => executeScripts(b));
+        safe(() => window.instgrm && window.instgrm.Embeds.process());
+        safe(() => window.twttr && window.twttr.widgets && window.twttr.widgets.load(el));
+        safe(() => window.FB && window.FB.XFBML && window.FB.XFBML.parse(el));
+      }
+
+      /* Any remaining inline scripts + a hook for third-party integrations. */
+      async function initializeThirdPartyPlugins(el) {
+        executeScripts(el);
+        safe(() => el.dispatchEvent(new CustomEvent("sdl:contentReady", { bubbles: true })));
+      }
+
+      return {
+        deepMerge: existing.deepMerge || deepMerge,
+        getFragment: existing.getFragment || getFragment,
+        reloadSquarespaceLifecycle: existing.reloadSquarespaceLifecycle || reloadSquarespaceLifecycle,
+        initializeAllPlugins: existing.initializeAllPlugins || initializeAllPlugins,
+        initializeCodeBlocks: existing.initializeCodeBlocks || initializeCodeBlocks,
+        initializeEmbedBlocks: existing.initializeEmbedBlocks || initializeEmbedBlocks,
+        initializeThirdPartyPlugins: existing.initializeThirdPartyPlugins || initializeThirdPartyPlugins,
+        registeredPlugins: existing.registeredPlugins || [],
+      };
+    })();
+
+    // Share the utilities with any other SDL plugins that load later.
+    if (!window.sdl$) window.sdl$ = sdl$;
+
     /* --------------------------------------------------------------------
        Default settings
     -------------------------------------------------------------------- */
@@ -344,7 +474,9 @@ if (!window.sdlPopup) {
 
       showPopupContent();
       state.activePopup = url;
-      Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
+      if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeSummaryV2Block) {
+        Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
+      }
       playSingleVideo();
 
       emitEvent("sdlPopup:afterOpenPopup", { url, selector, el: overlay });
@@ -484,7 +616,11 @@ if (!window.sdlPopup) {
     }
 
     function queueLayoutRefresh() {
-      const refresh = () => Squarespace.initializeLayoutBlocks(Y, Y.one(content));
+      const refresh = () => {
+        if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeLayoutBlocks) {
+          Squarespace.initializeLayoutBlocks(Y, Y.one(content));
+        }
+      };
       requestAnimationFrame(refresh);
       if (isAnimated()) setTimeout(refresh, duration() + 20);
     }
