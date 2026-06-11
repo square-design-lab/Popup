@@ -94,7 +94,12 @@ The target is auto-classified:
 
 ### Video lifecycle
 
-When a popup opens, its video **auto-plays** (set `autoplayVideo: false` to disable). This works for a video nested anywhere in the pulled content — not just a single video-only popup — and for Squarespace 7.1 "website component" video blocks, whose player (Plyr) only appears after asynchronous hydration. A short retry loop waits for the player to mount, then plays it. Because the click gesture has expired by the time hydration finishes, autoplay-with-sound is blocked by the browser, so playback falls back to **muted** (always permitted).
+When a popup opens, its video **auto-plays** (set `autoplayVideo: false` to disable). This works for a video nested anywhere in the pulled content — not just a single video-only popup — and for Squarespace 7.1 "website component" video blocks, whose player (Plyr) only appears after asynchronous hydration. A short retry loop waits for the player to mount, then plays it.
+
+**Sound:**
+
+- **External video embeds** (`#sdl-popup=https://youtu.be/…`, Vimeo, Loom, Wistia) autoplay **with sound**. They are `<iframe>` embeds built synchronously inside the click gesture (`?autoplay=1`, no mute), so the browser permits sound — exactly like a dedicated video-lightbox plugin.
+- **Squarespace native video** autoplays **muted**. Its `<video>` (Plyr) only exists after asynchronous hydration, by which point the click gesture has expired and the browser only allows muted autoplay. With `unmuteOnInteraction: true` (default) the popup unmutes it on the viewer's **first click or tap**; the native player's volume control is also always available.
 
 Any video in a popup — Squarespace native `<video>` blocks **and** embedded players (YouTube/Vimeo/Loom/Wistia) — is **paused and rewound when the popup closes**, and **starts again from the beginning** the next time it opens. Embedded players are stopped by blanking the iframe `src` (the only reliable way to halt YouTube/Vimeo audio) and reloaded fresh on reopen.
 

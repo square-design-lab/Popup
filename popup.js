@@ -302,6 +302,7 @@ if (!window.sdlPopup) {
       debugLoading: false,
       preloadContent: false,
       autoplayVideo: true,            // auto-play the popup's video on open
+      unmuteOnInteraction: true,      // unmute an autoplayed (muted) video on first click/tap
       loadingEl: `<div class="loading"></div>`,
 
       /* Visual styling — applied as CSS custom properties on :root.
@@ -352,6 +353,7 @@ if (!window.sdlPopup) {
       originalScrollBehavior: "",
       themeStyleEl: null,        // live section-theme <style> in <head> while open
       videoToken: 0,             // cancels stale autoplay retry loops
+      unmuteHandler: null,       // first-interaction unmute listener while open
     };
 
     // DOM references (assigned in buildStructure)
@@ -883,6 +885,7 @@ if (!window.sdlPopup) {
       if (!scope) return;
       // Cancel any pending autoplay retries and let Will-Myers players pause.
       state.videoToken++;
+      teardownUnmute();
       safeWindowEvent("wmPopupClosed");
       // Native HTML5 video: pause and rewind to the start.
       scope.querySelectorAll("video").forEach(v => {
@@ -931,16 +934,20 @@ if (!window.sdlPopup) {
       if (isAnimated()) setTimeout(refresh, duration() + 20);
     }
 
-    /* Autoplay the popup's video on open.
+    /* Autoplay the popup's native <video> on open.
 
-       Works for a video anywhere in the content (not just a single direct-child
-       block) and for Squarespace 7.1 "website component" video blocks, whose
-       <video> only appears AFTER async hydration — so we watch for it with a
-       MutationObserver as well as playing any video already present.
+       Works for a video nested anywhere in the content (not just a single
+       direct-child block) and for Squarespace 7.1 "website component" video
+       blocks, whose <video> (a Plyr player) only appears AFTER async hydration
+       — so we retry on a short poll until it mounts.
 
-       Autoplay-with-sound is blocked by browsers once the click gesture has
-       expired (hydration is async), so playback falls back to muted, which is
-       always allowed. */
+       NOTE on sound:
+       - External YouTube/Vimeo/Loom/Wistia popups are <iframe> embeds built
+         synchronously inside the click gesture, so they autoplay WITH sound
+         (handled in openMedia, not here).
+       - A native <video> only exists after async hydration, by which point the
+         click gesture has expired, so the browser only permits MUTED autoplay.
+         `unmuteOnInteraction` then unmutes it on the viewer's first click/tap. */
     function autoplayVideos(scope) {
       if (!settings.autoplayVideo || !scope) return;
 
@@ -964,6 +971,7 @@ if (!window.sdlPopup) {
               if (p2 && p2.catch) p2.catch(() => {});
             });
           }
+          if (video.muted) armUnmuteOnInteraction(scope);
           if (video.paused) {
             if (tries >= 3) video.muted = true; // give sound a brief chance first
             if (tries < 25) { tries++; setTimeout(pump, 200); }
@@ -976,6 +984,29 @@ if (!window.sdlPopup) {
       };
 
       pump();
+    }
+
+    /* Unmute an autoplayed (muted) video on the viewer's first interaction with
+       the popup — a real user gesture, which the browser allows to enable
+       sound. Native player controls (Plyr) remain available regardless. */
+    function armUnmuteOnInteraction(scope) {
+      if (!settings.unmuteOnInteraction || state.unmuteHandler) return;
+      const handler = () => {
+        scope.querySelectorAll("video").forEach(v => {
+          try { v.muted = false; if (v.paused) v.play().catch(() => {}); } catch (e) {}
+        });
+        teardownUnmute();
+      };
+      state.unmuteHandler = handler;
+      overlay.addEventListener("pointerdown", handler);
+      overlay.addEventListener("keydown", handler);
+    }
+
+    function teardownUnmute() {
+      if (!state.unmuteHandler) return;
+      overlay.removeEventListener("pointerdown", state.unmuteHandler);
+      overlay.removeEventListener("keydown", state.unmuteHandler);
+      state.unmuteHandler = null;
     }
 
     /* --------------------------------------------------------------------
