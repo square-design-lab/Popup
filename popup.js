@@ -301,6 +301,7 @@ if (!window.sdlPopup) {
       zIndex: 9999,
       debugLoading: false,
       preloadContent: false,
+      autoplayVideo: true,            // auto-play the popup's video on open
       loadingEl: `<div class="loading"></div>`,
 
       /* Visual styling — applied as CSS custom properties on :root.
@@ -350,6 +351,7 @@ if (!window.sdlPopup) {
       scrollPosition: 0,
       originalScrollBehavior: "",
       themeStyleEl: null,        // live section-theme <style> in <head> while open
+      videoToken: 0,             // cancels stale autoplay retry loops
     };
 
     // DOM references (assigned in buildStructure)
@@ -600,11 +602,19 @@ if (!window.sdlPopup) {
       // in the popup (forms initialized in the temp container don't survive
       // being moved — especially reCAPTCHA).
       sdl$.reinitializeForms(content);
-      startVideos(content); // restore embeds blanked on a previous close
-      playSingleVideo();
+      startVideos(content);       // restore embeds blanked on a previous close
+      autoplayVideos(content);    // play the popup's video (incl. 7.1 components)
+
+      // Notify the Will-Myers video ecosystem (VideoElement etc.) so any of its
+      // players inside the popup initialize/observe now that it is visible.
+      safeWindowEvent("wMPopupBuilt");
 
       emitEvent("sdlPopup:afterOpenPopup", detail);
       runHooks("afterOpenPopup", detail.url);
+    }
+
+    function safeWindowEvent(name) {
+      try { window.dispatchEvent(new Event(name)); } catch (e) {}
     }
 
     /* --------------------------------------------------------------------
@@ -871,6 +881,9 @@ if (!window.sdlPopup) {
 
     function resetVideos(scope) {
       if (!scope) return;
+      // Cancel any pending autoplay retries and let Will-Myers players pause.
+      state.videoToken++;
+      safeWindowEvent("wmPopupClosed");
       // Native HTML5 video: pause and rewind to the start.
       scope.querySelectorAll("video").forEach(v => {
         try { v.pause(); v.currentTime = 0; } catch (e) {}
@@ -918,37 +931,51 @@ if (!window.sdlPopup) {
       if (isAnimated()) setTimeout(refresh, duration() + 20);
     }
 
-    function playSingleVideo() {
-      const hasOnlyVideo = content.querySelector(
-        ":scope > .sqs-block-video[data-block-json], :scope > .fe-block .sqs-block-video[data-block-json]"
-      );
-      if (!hasOnlyVideo) return;
+    /* Autoplay the popup's video on open.
 
-      const json = JSON.parse(hasOnlyVideo.dataset.blockJson);
-      let video = hasOnlyVideo.querySelector("video");
-      if (!json || !json.settings) return;
+       Works for a video anywhere in the content (not just a single direct-child
+       block) and for Squarespace 7.1 "website component" video blocks, whose
+       <video> only appears AFTER async hydration — so we watch for it with a
+       MutationObserver as well as playing any video already present.
 
-      const playVideo = () => {
-        video.play().then(() => {
-          video.muted = false;
-        }).catch(error => {
-          console.log("Autoplay with sound failed:", error);
-          video.muted = true;
-          video.play();
-        });
-      };
+       Autoplay-with-sound is blocked by browsers once the click gesture has
+       expired (hydration is async), so playback falls back to muted, which is
+       always allowed. */
+    function autoplayVideos(scope) {
+      if (!settings.autoplayVideo || !scope) return;
 
-      const checkVideoLoaded = (attempts = 0) => {
-        video = hasOnlyVideo.querySelector("video");
+      // A fresh token cancels any pump still running from a previous open/close.
+      const token = ++state.videoToken;
+      let tries = 0;
+
+      const pump = () => {
+        if (token !== state.videoToken) return; // popup was closed/changed
+        const video = scope.querySelector("video");
         if (video) {
-          video.addEventListener("canplay", playVideo, { once: true });
-          if (video.readyState >= 4) playVideo();
-        } else if (attempts < 10) {
-          setTimeout(() => checkVideoLoaded(attempts + 1), 100);
+          video.playsInline = true;
+          // Try as-is first (keeps sound if the browser allows it), then fall
+          // back to muted — the only mode guaranteed to autoplay once the click
+          // gesture has expired during async hydration.
+          const p = video.play();
+          if (p && p.catch) {
+            p.catch(() => {
+              video.muted = true;
+              const p2 = video.play();
+              if (p2 && p2.catch) p2.catch(() => {});
+            });
+          }
+          if (video.paused) {
+            if (tries >= 3) video.muted = true; // give sound a brief chance first
+            if (tries < 25) { tries++; setTimeout(pump, 200); }
+          }
+        } else if (tries < 25) {
+          // <video> not in the DOM yet — wait for the 7.1 component to hydrate.
+          tries++;
+          setTimeout(pump, 200);
         }
       };
 
-      checkVideoLoaded();
+      pump();
     }
 
     /* --------------------------------------------------------------------

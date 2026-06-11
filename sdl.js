@@ -633,6 +633,70 @@ window.sdl$ = (function (existing) {
   const pauseEmbeddedVideos = scope => toggleEmbeddedVideos(scope, "close");
 
   /* ----------------------------------------------------------------------
+     autoplayVideos — play the first native <video> inside a container.
+
+     Robust for content pulled into an overlay:
+       • finds a <video> nested anywhere (not just a direct child),
+       • waits, via a short retry poll, for Squarespace 7.1 "website component"
+         video blocks whose <video> only appears AFTER async hydration, and for
+         the Plyr player Squarespace wraps native video in (which can re-pause
+         during mount),
+       • falls back to muted playback — the only mode browsers allow once the
+         click gesture has expired during that async hydration.
+
+     Returns a cancel() function (call it on close to stop the retry loop).
+  ---------------------------------------------------------------------- */
+  function autoplayVideos(scope, opts = {}) {
+    if (!scope) return () => {};
+    const maxTries = opts.maxTries ?? 25;
+    const interval = opts.interval ?? 200;
+    let cancelled = false;
+    let tries = 0;
+
+    const pump = () => {
+      if (cancelled) return;
+      const video = scope.querySelector("video");
+      if (video) {
+        video.playsInline = true;
+        const p = video.play();
+        if (p && p.catch) {
+          p.catch(() => {
+            video.muted = true;
+            const p2 = video.play();
+            if (p2 && p2.catch) p2.catch(() => {});
+          });
+        }
+        if (video.paused) {
+          if (tries >= 3) video.muted = true; // give sound a brief chance first
+          if (tries < maxTries) { tries++; setTimeout(pump, interval); }
+        }
+      } else if (tries < maxTries) {
+        tries++;
+        setTimeout(pump, interval);
+      }
+    };
+
+    pump();
+    return () => { cancelled = true; };
+  }
+
+  /* Stop + rewind native <video> elements (pair with pauseEmbeddedVideos). */
+  function resetNativeVideos(scope) {
+    if (!scope) return;
+    scope.querySelectorAll("video").forEach(v => {
+      try { v.pause(); v.currentTime = 0; } catch (e) {}
+    });
+  }
+
+  /* Fire the Will-Myers video-ecosystem events (VideoElement, willmyers popup).
+     dispatch("open") on show → players (re)initialize/observe;
+     dispatch("close") on hide → players pause. */
+  function notifyVideoEcosystem(phase) {
+    const name = phase === "close" ? "wmPopupClosed" : "wMPopupBuilt";
+    try { window.dispatchEvent(new Event(name)); } catch (e) {}
+  }
+
+  /* ----------------------------------------------------------------------
      imageBlockToLightbox — convert an image block into a full-res lightbox
      link + caption (replace-block-image-lightbox). Squarespace stores the
      caption in the img alt as "title _TD_ description".
@@ -749,6 +813,9 @@ window.sdl$ = (function (existing) {
     removeAttributes: existing.removeAttributes || removeAttributes,
     pauseEmbeddedVideos: existing.pauseEmbeddedVideos || pauseEmbeddedVideos,
     resumeEmbeddedVideos: existing.resumeEmbeddedVideos || resumeEmbeddedVideos,
+    autoplayVideos: existing.autoplayVideos || autoplayVideos,
+    resetNativeVideos: existing.resetNativeVideos || resetNativeVideos,
+    notifyVideoEcosystem: existing.notifyVideoEcosystem || notifyVideoEcosystem,
     isBackend: existing.isBackend || isBackend,
     onAjaxLoaded: existing.onAjaxLoaded || onAjaxLoaded,
     // optional plugin registry

@@ -94,7 +94,11 @@ The target is auto-classified:
 
 ### Video lifecycle
 
+When a popup opens, its video **auto-plays** (set `autoplayVideo: false` to disable). This works for a video nested anywhere in the pulled content — not just a single video-only popup — and for Squarespace 7.1 "website component" video blocks, whose player (Plyr) only appears after asynchronous hydration. A short retry loop waits for the player to mount, then plays it. Because the click gesture has expired by the time hydration finishes, autoplay-with-sound is blocked by the browser, so playback falls back to **muted** (always permitted).
+
 Any video in a popup — Squarespace native `<video>` blocks **and** embedded players (YouTube/Vimeo/Loom/Wistia) — is **paused and rewound when the popup closes**, and **starts again from the beginning** the next time it opens. Embedded players are stopped by blanking the iframe `src` (the only reliable way to halt YouTube/Vimeo audio) and reloaded fresh on reopen.
+
+For compatibility with the Will-Myers video ecosystem (e.g. the `VideoElement` plugin), the popup dispatches a `wMPopupBuilt` event on `window` when it opens and `wmPopupClosed` when it closes, so those players initialize/observe and pause accordingly.
 
 ---
 

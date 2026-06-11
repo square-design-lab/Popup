@@ -479,6 +479,7 @@
                     </div>
                     <div class="toggle-row"><label>Close on Overlay Click</label><input type="checkbox" id="closeOnOverlayClick" checked></div>
                     <div class="toggle-row"><label>Close on Escape Key</label><input type="checkbox" id="closeOnEscape" checked></div>
+                    <div class="toggle-row"><label>Autoplay Video on Open</label><input type="checkbox" id="autoplayVideo" checked></div>
                     <div class="toggle-row"><label>Preload Content (SEO)</label><input type="checkbox" id="preloadContent"></div>
                     <div class="helper-text">Preload fetches all popup pages on load and keeps them in a hidden, crawler-accessible container.</div>
                 </div>
@@ -588,6 +589,7 @@
           closePlacement: $('closePlacement').value,
           closeOnOverlayClick: $('closeOnOverlayClick').checked,
           closeOnEscape: $('closeOnEscape').checked,
+          autoplayVideo: $('autoplayVideo').checked,
           preloadContent: $('preloadContent').checked,
         };
       }
@@ -653,6 +655,7 @@
           openAnimationDuration: c.openAnimationDuration,
           closeOnOverlayClick: c.closeOnOverlayClick,
           closeOnEscape: c.closeOnEscape,
+          autoplayVideo: c.autoplayVideo,
           closePlacement: c.closePlacement,
           preloadContent: c.preloadContent,
           styles,
