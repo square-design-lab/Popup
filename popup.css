@@ -1,0 +1,303 @@
+/* =========================================================================
+   sdlPopup — Squarespace Popup Plugin
+   Stylesheet (popup.css)
+   ========================================================================= */
+
+:root {
+  /* Layout */
+  --sdl-popup-width: 800px;
+  --sdl-popup-max-height: 80vh;
+
+  /* Animation */
+  --sdl-popup-anim-duration: 300ms;
+  --sdl-popup-slide-distance: 40px;
+
+  /* Overlay */
+  --sdl-popup-overlay-opacity: 0.5;
+  --sdl-popup-overlay-color: hsla(0, 0%, 0%, 1);
+  --sdl-popup-overlay-blur: 5px;
+
+  /* Container */
+  --sdl-popup-border: initial;
+  --sdl-popup-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+  --sdl-popup-border-radius: 5px;
+
+  /* Close button */
+  --sdl-popup-close-color: white;
+  --sdl-popup-close-bg: hsla(0, 0%, 0%, .5);
+  --sdl-popup-close-blur: 15px;
+  --sdl-popup-close-thickness: 2px;
+  --sdl-popup-close-border: none;
+  --sdl-popup-close-radius: 50%;
+  --sdl-popup-close-offset: 10px;
+  --sdl-popup-close-size: 30px;
+  --sdl-popup-close-padding: 6px;
+
+  /* Loading */
+  --sdl-popup-loading-color: var(--accent-hsl);
+
+  /* Single block */
+  --sdl-popup-single-padding: 17px;
+}
+
+/* -------------------------------------------------------------------------
+   Overlay
+   ------------------------------------------------------------------------- */
+.sdl-popup-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
+  opacity: 0;
+  backdrop-filter: blur(var(--sdl-popup-overlay-blur));
+  transition: opacity var(--sdl-popup-anim-duration) ease;
+}
+
+.sdl-popup-overlay.sdl-popup-active {
+  opacity: 1;
+}
+
+.sdl-popup-overlay:before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--sdl-popup-overlay-color);
+  opacity: var(--sdl-popup-overlay-opacity);
+}
+
+/* -------------------------------------------------------------------------
+   Container
+   ------------------------------------------------------------------------- */
+.sdl-popup-container {
+  display: none;
+  position: fixed;
+  overflow-y: auto;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background-color: var(--siteBackgroundColor);
+  max-width: var(--sdl-popup-width);
+  width: 88vw;
+  max-height: var(--sdl-popup-max-height);
+  border-radius: var(--sdl-popup-border-radius);
+  border: var(--sdl-popup-border);
+  box-shadow: var(--sdl-popup-shadow);
+  transition: opacity var(--sdl-popup-anim-duration) ease,
+              transform var(--sdl-popup-anim-duration) ease;
+}
+
+/* -------------------------------------------------------------------------
+   Display directions — hidden state (overlay not active) + active state
+   ------------------------------------------------------------------------- */
+
+/* Fade */
+.sdl-popup-dir-fade .sdl-popup-container {
+  opacity: 0;
+  transform: translate(-50%, -50%);
+}
+
+/* Slide from top */
+.sdl-popup-dir-slide-top .sdl-popup-container {
+  opacity: 0;
+  transform: translate(-50%, calc(-50% - var(--sdl-popup-slide-distance)));
+}
+
+/* Slide from bottom */
+.sdl-popup-dir-slide-bottom .sdl-popup-container {
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + var(--sdl-popup-slide-distance)));
+}
+
+/* Centered directions — active (shown) state */
+.sdl-popup-dir-fade.sdl-popup-active .sdl-popup-container,
+.sdl-popup-dir-slide-top.sdl-popup-active .sdl-popup-container,
+.sdl-popup-dir-slide-bottom.sdl-popup-active .sdl-popup-container {
+  opacity: 1;
+  transform: translate(-50%, -50%);
+}
+
+/* ---- Edge-aligned side drawers (left / right) ---- */
+.sdl-popup-dir-slide-left .sdl-popup-container,
+.sdl-popup-dir-slide-right .sdl-popup-container {
+  top: 0;
+  bottom: 0;
+  height: 100%;
+  max-height: 100%;
+  width: var(--sdl-popup-width);
+  max-width: 92vw;
+  opacity: 1;
+}
+
+/* Left drawer */
+.sdl-popup-dir-slide-left .sdl-popup-container {
+  left: 0;
+  right: auto;
+  transform: translateX(-100%);
+  border-radius: 0 var(--sdl-popup-border-radius) var(--sdl-popup-border-radius) 0;
+}
+.sdl-popup-dir-slide-left.sdl-popup-active .sdl-popup-container {
+  transform: translateX(0);
+}
+
+/* Right drawer */
+.sdl-popup-dir-slide-right .sdl-popup-container {
+  right: 0;
+  left: auto;
+  transform: translateX(100%);
+  border-radius: var(--sdl-popup-border-radius) 0 0 var(--sdl-popup-border-radius);
+}
+.sdl-popup-dir-slide-right.sdl-popup-active .sdl-popup-container {
+  transform: translateX(0);
+}
+
+/* No-animation mode */
+.sdl-popup-no-anim .sdl-popup-overlay,
+.sdl-popup-no-anim .sdl-popup-container {
+  transition: none !important;
+}
+
+/* -------------------------------------------------------------------------
+   Close button
+   ------------------------------------------------------------------------- */
+.sdl-popup-close {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  top: var(--sdl-popup-close-offset);
+  right: var(--sdl-popup-close-offset);
+  font-size: 24px;
+  border: var(--sdl-popup-close-border);
+  background: var(--sdl-popup-close-bg);
+  backdrop-filter: blur(var(--sdl-popup-close-blur));
+  cursor: pointer;
+  z-index: 9;
+  border-radius: var(--sdl-popup-close-radius);
+  width: var(--sdl-popup-close-size);
+  height: var(--sdl-popup-close-size);
+  padding: var(--sdl-popup-close-padding);
+  box-sizing: border-box;
+}
+
+.sdl-popup-close svg {
+  width: 100%;
+  height: 100%;
+  stroke: var(--sdl-popup-close-color);
+  stroke-width: var(--sdl-popup-close-thickness);
+}
+
+/* -------------------------------------------------------------------------
+   Body scroll freeze + scrollbar compensation
+   ------------------------------------------------------------------------- */
+body.sdl-popup-open {
+  overflow: hidden;
+  position: fixed;
+  width: calc(100% - var(--sdl-popup-freeze-scroll-padding-right));
+  top: var(--sdl-popup-freeze-scroll-top);
+  margin-right: var(--sdl-popup-freeze-scroll-padding-right);
+}
+
+.sdl-popup-content .page-section:first-child {
+  padding-top: unset !important;
+}
+
+/* -------------------------------------------------------------------------
+   Loading indicator
+   ------------------------------------------------------------------------- */
+.sdl-popup-loading {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes sdl-loading-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(359deg); }
+}
+
+.sdl-popup-loading .loading {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: -25px 0 0 -25px;
+  border-bottom: 6px solid hsla(var(--sdl-popup-loading-color), 0.2);
+  border-left: 6px solid hsla(var(--sdl-popup-loading-color), 0.2);
+  border-right: 6px solid hsla(var(--sdl-popup-loading-color), 0.2);
+  border-top: 6px solid hsla(var(--sdl-popup-loading-color), 0.7);
+  border-radius: 100%;
+  height: 50px;
+  width: 50px;
+  animation: sdl-loading-spin 1s infinite linear;
+}
+
+/* Legacy fade utility */
+.sdl-popup-fade-in {
+  opacity: 0;
+  transition: opacity 300ms ease-in-out;
+}
+.sdl-popup-fade-in.sdl-popup-active {
+  opacity: 1;
+}
+
+/* -------------------------------------------------------------------------
+   Error fallback
+   ------------------------------------------------------------------------- */
+.sdl-popup-error {
+  padding: 20px;
+}
+.sdl-popup-error > *:first-child { margin-top: 0px; }
+.sdl-popup-error > *:last-child  { margin-bottom: 0px; }
+
+/* -------------------------------------------------------------------------
+   Odds & ends
+   ------------------------------------------------------------------------- */
+.sdl-popup-overlay .sqs-block-video[data-block-json*="nativeVideo"] .embed-block-wrapper {
+  padding-bottom: unset !important;
+}
+.sdl-popup-overlay .video-player .video-player__icons {
+  top: 0;
+}
+
+/* Hide popup if moved into last section for loading */
+#sections > section:last-of-type .content-wrapper > .temp-popup-container,
+#page-regions > section:last-of-type .content-wrapper > .temp-popup-container {
+  z-index: -1;
+  position: absolute;
+}
+
+/* -------------------------------------------------------------------------
+   Single block
+   ------------------------------------------------------------------------- */
+.sdl-popup-content > .sqs-block,
+.sdl-popup-content > .fe-block {
+  background-color: var(--siteBackgroundColor);
+}
+
+.sdl-popup-content > .sqs-block:not(.sqs-block-video, .sqs-block-image),
+.sdl-popup-content > .fe-block .sqs-block:not(.sqs-block-video, .sqs-block-image) {
+  padding: var(--sdl-popup-single-padding) !important;
+}
+
+.sdl-popup-content > .sqs-block.sqs-block-video,
+.sdl-popup-content > .sqs-block.sqs-block-image,
+.sdl-popup-content > .fe-block .sqs-block.sqs-block-video,
+.sdl-popup-content > .fe-block .sqs-block.sqs-block-image {
+  padding: 0px !important;
+}
+
+/* Content-fit images */
+.sdl-popup-content > .fe-block .sqs-block-image .fluid-image-container:has(.content-fit),
+.sdl-popup-content > .sqs-block-image .fluid-image-container:has(.content-fit) {
+  max-height: var(--sdl-popup-max-height);
+  min-width: 100% !important;
+}
+.sdl-popup-content > .fe-block .sqs-block-image .fluid-image-container:has(.content-fit) img,
+.sdl-popup-content > .sqs-block-image .fluid-image-container:has(.content-fit) img {
+  position: relative;
+}
