@@ -79,6 +79,22 @@ The `/#` variants are useful in Squarespace editors where a bare `#` prefix may 
 | `#sdl-popup=/about#team-section` | Opens `/about`, displays only the `#team-section` element |
 | `#sdl-popup=/shop/product-page.fe-block-abc123` | Opens `/shop/product-page`, displays only the `.fe-block-abc123` element |
 | `#sdl-popup=/contact[data-section-id="abc123"]` | Opens `/contact`, displays only the section with that data attribute |
+| `#sdl-popup=https://youtu.be/VIDEO_ID` | Opens a YouTube / Vimeo / Loom / Wistia video as an auto-playing embed |
+| `#sdl-popup=https://cdn.example.com/photo.jpg` | Opens an image full-size (requested at `?format=2500w` for Squarespace images) |
+| `#sdl-popup=https://example.com` | Opens any external page inside an iframe |
+
+### Content types
+
+The target is auto-classified:
+
+- **Internal page / section / block** — fetched via `?format=html`, initialized (forms, galleries, code/embed blocks, website components) and displayed.
+- **Image** (`.jpg/.jpeg/.png/.gif/.webp/.svg`) — shown full-size in the popup.
+- **Video embed** (YouTube, Vimeo, Loom, Wistia) — shown in a responsive 16:9 iframe and auto-played.
+- **Any other external URL** — shown in an iframe.
+
+### Video lifecycle
+
+Any video in a popup — Squarespace native `<video>` blocks **and** embedded players (YouTube/Vimeo/Loom/Wistia) — is **paused and rewound when the popup closes**, and **starts again from the beginning** the next time it opens. Embedded players are stopped by blanking the iframe `src` (the only reliable way to halt YouTube/Vimeo audio) and reloaded fresh on reopen.
 
 ---
 

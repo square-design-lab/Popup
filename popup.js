@@ -225,9 +225,54 @@ if (!window.sdlPopup) {
         safe(() => el.dispatchEvent(new CustomEvent("sdl:contentReady", { bubbles: true })));
       }
 
+      /* Classify a popup target: image / external video embed / external page
+         (iframe) / internal Squarespace page. */
+      function detectSourceType(target) {
+        const a = String(target || "");
+        if (a.match(/^https?:\/\//i) &&
+            a.match(/(youtu\.be|youtube\.com|vimeo\.com|loom\.com|wistia\.com\/medias\/)/i)) {
+          return "video";
+        }
+        if (a.match(/^https?:\/\/.*\.(jpe?g|png|gif|webp|svg)(\?[^#]*)?$/i)) {
+          return "image";
+        }
+        if (a.match(/^https?:\/\//i)) return "iframe";
+        return "page";
+      }
+
+      /* Request a Squarespace/CDN image at a larger render size. */
+      function imageUrlFullRes(url, width = 2500) {
+        if (!url) return url;
+        const base = url.split("?")[0];
+        return `${base}?format=${width}w`;
+      }
+
+      /* Turn a share URL into an embeddable (autoplay) iframe src. */
+      function videoEmbedUrl(url, autoplay = true) {
+        if (!url) return url;
+        const ap = autoplay ? "1" : "0";
+        let m;
+        if ((m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([\w-]+)/))) {
+          return `https://www.youtube.com/embed/${m[1]}?autoplay=${ap}&rel=0`;
+        }
+        if ((m = url.match(/vimeo\.com\/(?:video\/)?(\d+)/))) {
+          return `https://player.vimeo.com/video/${m[1]}?autoplay=${ap}`;
+        }
+        if ((m = url.match(/loom\.com\/(?:share|embed)\/([\w-]+)/))) {
+          return `https://www.loom.com/embed/${m[1]}?autoplay=${ap}`;
+        }
+        if ((m = url.match(/wistia\.com\/medias\/([\w-]+)/))) {
+          return `https://fast.wistia.net/embed/iframe/${m[1]}?autoPlay=${ap}`;
+        }
+        return url;
+      }
+
       return {
         deepMerge: existing.deepMerge || deepMerge,
         getFragment: existing.getFragment || getFragment,
+        detectSourceType: existing.detectSourceType || detectSourceType,
+        imageUrlFullRes: existing.imageUrlFullRes || imageUrlFullRes,
+        videoEmbedUrl: existing.videoEmbedUrl || videoEmbedUrl,
         reloadSquarespaceLifecycle: existing.reloadSquarespaceLifecycle || reloadSquarespaceLifecycle,
         reinitializeForms: existing.reinitializeForms || reinitializeForms,
         initializeAllPlugins: existing.initializeAllPlugins || initializeAllPlugins,
@@ -463,9 +508,11 @@ if (!window.sdlPopup) {
     }
 
     /* --------------------------------------------------------------------
-       Parse a popup trigger href into { url, selector }
+       Trigger parsing
     -------------------------------------------------------------------- */
-    function parseHref(href) {
+
+    // Strip the #sdl-popup= prefix and return the raw target string.
+    function stripPrefix(href) {
       const prefixLength = href.startsWith("/#sdl-popup=")
         ? "/#sdl-popup=".length
         : href.startsWith("/#sdlpopup=")
@@ -473,10 +520,12 @@ if (!window.sdlPopup) {
         : href.startsWith("#sdl-popup=")
         ? "#sdl-popup=".length
         : "#sdlpopup=".length;
+      return href.substring(prefixLength);
+    }
 
-      const fullPath = href.substring(prefixLength);
+    // Split an internal page target into { url, selector }.
+    function parsePageTarget(fullPath) {
       let url, selector;
-
       if (fullPath.includes("#")) {
         [url, selector] = fullPath.split("#");
         selector = `#${selector}`;
@@ -502,18 +551,26 @@ if (!window.sdlPopup) {
       if (!link) return;
 
       e.preventDefault();
-      const { url, selector } = parseHref(link.getAttribute("href"));
-      await openPopup(url, selector);
+      await openTarget(stripPrefix(link.getAttribute("href")));
+    }
+
+    // Route a raw target to the right opener: image / video / external page
+    // (iframe) build a media node; everything else is an internal page.
+    async function openTarget(fullPath) {
+      const kind = sdl$.detectSourceType(fullPath);
+      if (kind === "page") {
+        const { url, selector } = parsePageTarget(fullPath);
+        return openPopup(url, selector);
+      }
+      return openMedia(kind, fullPath);
     }
 
     /* --------------------------------------------------------------------
-       Open
+       Open — shared overlay machinery
     -------------------------------------------------------------------- */
-    async function openPopup(url, selector = null) {
-      runHooks("beforeOpenPopup", url);
-      emitEvent("sdlPopup:beforeOpenPopup", { url, selector, el: overlay });
 
-      // Scrollbar compensation + scroll freeze
+    // Freeze scroll, show the overlay + loader, and start the reveal animation.
+    function beginOverlay(activeKey) {
       const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
       state.scrollPosition = window.scrollY;
       state.originalScrollBehavior = getComputedStyle(document.documentElement).scrollBehavior;
@@ -527,12 +584,39 @@ if (!window.sdlPopup) {
       container.style.display = "none";
       loadingElem.style.display = "block";
       content.style.display = "none";
-      document.body.dataset.activePopup = `${url}${selector ? selector : ""}`;
+      document.body.dataset.activePopup = activeKey;
 
-      // Reveal overlay (triggers the CSS opacity/transform transition)
       requestAnimationFrame(() => overlay.classList.add("sdl-popup-active"));
+    }
 
+    // Reveal the content and run all post-open initializers.
+    function finishOverlay(key, detail) {
+      showPopupContent();
+      state.activePopup = key;
+      if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeSummaryV2Block) {
+        Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
+      }
+      // Re-wire form blocks now that the content lives in its final location
+      // in the popup (forms initialized in the temp container don't survive
+      // being moved — especially reCAPTCHA).
+      sdl$.reinitializeForms(content);
+      startVideos(content); // restore embeds blanked on a previous close
+      playSingleVideo();
+
+      emitEvent("sdlPopup:afterOpenPopup", detail);
+      runHooks("afterOpenPopup", detail.url);
+    }
+
+    /* --------------------------------------------------------------------
+       Open an internal page / section / block
+    -------------------------------------------------------------------- */
+    async function openPopup(url, selector = null) {
+      runHooks("beforeOpenPopup", url);
+      emitEvent("sdlPopup:beforeOpenPopup", { url, selector, el: overlay });
+      beginOverlay(`${url}${selector ? selector : ""}`);
       if (settings.debugLoading) return;
+
+      content.classList.remove("sdl-popup-media");
 
       try {
         if (!state.popups.has(url)) {
@@ -585,19 +669,53 @@ if (!window.sdlPopup) {
         state.currentSelector = null;
       }
 
-      showPopupContent();
-      state.activePopup = url;
-      if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeSummaryV2Block) {
-        Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
-      }
-      // Re-wire form blocks now that the content lives in its final location
-      // in the popup (forms initialized in the temp container don't survive
-      // being moved — especially reCAPTCHA).
-      sdl$.reinitializeForms(content);
-      playSingleVideo();
+      finishOverlay(url, { url, selector, el: overlay });
+    }
 
-      emitEvent("sdlPopup:afterOpenPopup", { url, selector, el: overlay });
-      runHooks("afterOpenPopup", url);
+    /* --------------------------------------------------------------------
+       Open a media target — image / external video embed / external page.
+       Media is rebuilt fresh every open (no caching), so videos always start
+       from the beginning.
+    -------------------------------------------------------------------- */
+    async function openMedia(kind, target) {
+      runHooks("beforeOpenPopup", target);
+      emitEvent("sdlPopup:beforeOpenPopup", { url: target, selector: null, el: overlay });
+      beginOverlay(target);
+      if (settings.debugLoading) return;
+
+      removeThemeStyles();
+      content.innerHTML = "";
+      content.classList.add("sdl-popup-media");
+      content.appendChild(buildMediaNode(kind, target));
+
+      // Nothing to move back to a cache on close.
+      state.currentSelector = null;
+      state.originalParent = null;
+      state.originalNextSibling = null;
+
+      finishOverlay(target, { url: target, selector: null, el: overlay });
+    }
+
+    function buildMediaNode(kind, target) {
+      if (kind === "image") {
+        const wrap = document.createElement("div");
+        wrap.className = "sdl-popup-media-image";
+        const img = document.createElement("img");
+        img.src = sdl$.imageUrlFullRes(target);
+        img.alt = "";
+        wrap.appendChild(img);
+        return wrap;
+      }
+      // video embed or external page → iframe
+      const wrap = document.createElement("div");
+      wrap.className = kind === "video" ? "sdl-popup-media-embed" : "sdl-popup-media-frame";
+      const iframe = document.createElement("iframe");
+      iframe.src = kind === "video" ? sdl$.videoEmbedUrl(target, true) : target;
+      iframe.setAttribute("frameborder", "0");
+      iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture; encrypted-media");
+      iframe.setAttribute("allowfullscreen", "");
+      wrap.appendChild(iframe);
+      return wrap;
     }
 
     function createErrorContent(url, selector) {
@@ -694,6 +812,9 @@ if (!window.sdlPopup) {
 
       runHooks("beforeClosePopup", state.activePopup);
 
+      // Stop & rewind every video immediately (don't wait for the fade-out).
+      resetVideos(content);
+
       const teardown = () => {
         if (state.originalParent) {
           while (content.firstChild) {
@@ -739,6 +860,43 @@ if (!window.sdlPopup) {
       } else {
         teardown();
       }
+    }
+
+    /* --------------------------------------------------------------------
+       Video lifecycle — pause + rewind on close, fresh start on open.
+       Covers Squarespace native <video> elements AND embedded players
+       (YouTube / Vimeo / Loom / Wistia / native-video iframes).
+    -------------------------------------------------------------------- */
+    const VIDEO_IFRAME_RE = /youtube|youtu\.be|vimeo|loom|wistia|playlist|\/video|videoseries|video-player/i;
+
+    function resetVideos(scope) {
+      if (!scope) return;
+      // Native HTML5 video: pause and rewind to the start.
+      scope.querySelectorAll("video").forEach(v => {
+        try { v.pause(); v.currentTime = 0; } catch (e) {}
+      });
+      // Embedded players: blanking the src is the only reliable way to stop
+      // YouTube/Vimeo playback. Stash it so the next open reloads from 0.
+      scope.querySelectorAll("iframe").forEach(f => {
+        const src = f.getAttribute("src");
+        if (src && VIDEO_IFRAME_RE.test(src)) {
+          f.setAttribute("data-sdl-src", src);
+          f.removeAttribute("src");
+        }
+      });
+    }
+
+    function startVideos(scope) {
+      if (!scope) return;
+      // Restore any embed blanked on a previous close → reloads from the start.
+      scope.querySelectorAll("iframe[data-sdl-src]").forEach(f => {
+        f.setAttribute("src", f.getAttribute("data-sdl-src"));
+        f.removeAttribute("data-sdl-src");
+      });
+      // Make sure native videos are cued to the beginning.
+      scope.querySelectorAll("video").forEach(v => {
+        try { v.currentTime = 0; } catch (e) {}
+      });
     }
 
     /* --------------------------------------------------------------------
@@ -864,7 +1022,9 @@ if (!window.sdlPopup) {
     const api = {
       settings,
       state,
-      open: openPopup,
+      open: openPopup,       // open an internal page/section/block
+      openMedia,             // open an image / video / external page directly
+      openTarget,            // auto-detect target type and open
       close: closePopup,
     };
 
