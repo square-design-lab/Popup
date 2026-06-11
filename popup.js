@@ -48,37 +48,98 @@ if (!window.sdlPopup) {
         return target;
       }
 
-      /* Fetch a page and return a deep-imported copy of the matched fragment. */
+      /* Fetch a page and return a deep-imported copy of the matched fragment.
+
+         - Uses Squarespace's lean `?format=html` content endpoint.
+         - Also carries the page's `#sectionThemesStyles` <style> (which lives
+           outside #sections, in the page head) along with the fragment so that
+           sections fetched from a *different* page keep their correct
+           background/colour theming. Tagged `.sdl-popup-section-themes` and
+           injected into <head> while the popup is open (see openPopup). */
       async function getFragment(url, selector) {
-        const response = await fetch(url, { credentials: "same-origin" });
+        const fetchUrl = url + (url.includes("?") ? "&" : "?") + "format=html";
+        const response = await fetch(fetchUrl, { credentials: "same-origin" });
         if (!response.ok) throw new Error(`Fetch failed for "${url}" (${response.status})`);
         const html = await response.text();
         const doc = new DOMParser().parseFromString(html, "text/html");
         const found = selector ? doc.querySelector(selector) : doc.body;
         if (!found) throw new Error(`Selector "${selector}" not found at "${url}"`);
-        return document.importNode(found, true);
+        const node = document.importNode(found, true);
+
+        const themeStyles = doc.querySelector("#sectionThemesStyles");
+        if (themeStyles) {
+          const clone = document.importNode(themeStyles, true);
+          clone.removeAttribute("id");
+          clone.className = "sdl-popup-section-themes";
+          node.appendChild(clone);
+        }
+        return node;
       }
 
       /* Re-execute <script> tags — parsed/imported markup never runs scripts.
-         Idempotent: each script is flagged once it has been re-run. */
+
+         Runs SEQUENTIALLY (waits for each external script's onload before the
+         next) so dependent embeds load in order, rewrites `document.write` so a
+         block can't blow away the page, skips non-JS (JSON/template) scripts,
+         and is idempotent (each <script> is flagged once it has been re-run).
+         Returns a Promise that resolves when all scripts have run. */
       function executeScripts(container) {
-        if (!container) return;
-        container.querySelectorAll("script:not([data-sdl-ran])").forEach(old => {
-          const script = document.createElement("script");
-          Array.from(old.attributes).forEach(a => script.setAttribute(a.name, a.value));
-          script.textContent = old.textContent;
-          script.setAttribute("data-sdl-ran", "");
-          old.parentNode.replaceChild(script, old);
+        if (!container) return Promise.resolve();
+        const scripts = Array.from(
+          container.querySelectorAll("script:not([data-sdl-ran])")
+        ).filter(s => {
+          const t = s.getAttribute("type");
+          return !t || t === "text/javascript" || t === "application/javascript";
         });
+
+        return scripts.reduce(
+          (chain, old) =>
+            chain.then(
+              () =>
+                new Promise(resolve => {
+                  const script = document.createElement("script");
+                  Array.from(old.attributes).forEach(a =>
+                    script.setAttribute(a.name, a.value)
+                  );
+                  script.setAttribute("data-sdl-ran", "");
+                  if (old.src) {
+                    // Resolve on load/error, with a timeout guard so a blocked
+                    // or never-firing external script can't stall the chain.
+                    let done = false;
+                    const finish = () => { if (!done) { done = true; resolve(); } };
+                    script.onload = script.onerror = finish;
+                    setTimeout(finish, 5000);
+                    script.src = old.src;
+                    old.parentNode.replaceChild(script, old);
+                  } else {
+                    let code = old.textContent || "";
+                    if (code.indexOf("document.write") !== -1) {
+                      const id = "sdl-w-" + Math.random().toString(36).slice(2);
+                      script.setAttribute("data-sdl-write", id);
+                      code = code.replace(
+                        /document\.write\s*\(/g,
+                        `document.querySelector('[data-sdl-write="${id}"]').insertAdjacentHTML('beforebegin',`
+                      );
+                    }
+                    script.textContent = code;
+                    old.parentNode.replaceChild(script, old);
+                    resolve();
+                  }
+                })
+            ),
+          Promise.resolve()
+        );
       }
 
-      /* Trigger Squarespace's responsive ImageLoader on lazy images. */
+      /* Trigger Squarespace's responsive ImageLoader on lazy images
+         (both data-src lazy images and images that have no src yet). */
       function loadImages(el) {
         const imageLoader = window.ImageLoader || window.Squarespace?.ImageLoader;
         if (!imageLoader || typeof imageLoader.load !== "function") return;
-        (el || document).querySelectorAll("img[data-src]").forEach(img =>
-          safe(() => imageLoader.load(img, { load: true }))
-        );
+        (el || document).querySelectorAll("img[data-src], img:not([src])").forEach(img => {
+          safe(() => imageLoader.load(img, { load: true }));
+          img.classList.add("loaded");
+        });
       }
 
       /* Run Squarespace's block lifecycle on a freshly inserted container. */
@@ -145,14 +206,14 @@ if (!window.sdlPopup) {
         registry.forEach(fn => safe(() => typeof fn === "function" && fn()));
       }
 
-      /* Code blocks: re-execute their embedded scripts. */
+      /* Code blocks: re-execute their embedded scripts (in order). */
       async function initializeCodeBlocks(el) {
-        el.querySelectorAll(".sqs-block-code, .code-block").forEach(b => executeScripts(b));
+        await executeScripts(el);
       }
 
       /* Embed blocks: re-execute scripts + nudge common social SDKs. */
       async function initializeEmbedBlocks(el) {
-        el.querySelectorAll(".sqs-block-embed, .embed-block").forEach(b => executeScripts(b));
+        await executeScripts(el);
         safe(() => window.instgrm && window.instgrm.Embeds.process());
         safe(() => window.twttr && window.twttr.widgets && window.twttr.widgets.load(el));
         safe(() => window.FB && window.FB.XFBML && window.FB.XFBML.parse(el));
@@ -160,7 +221,7 @@ if (!window.sdlPopup) {
 
       /* Any remaining inline scripts + a hook for third-party integrations. */
       async function initializeThirdPartyPlugins(el) {
-        executeScripts(el);
+        await executeScripts(el);
         safe(() => el.dispatchEvent(new CustomEvent("sdl:contentReady", { bubbles: true })));
       }
 
@@ -243,6 +304,7 @@ if (!window.sdlPopup) {
       originalNextSibling: null,
       scrollPosition: 0,
       originalScrollBehavior: "",
+      themeStyleEl: null,        // live section-theme <style> in <head> while open
     };
 
     // DOM references (assigned in buildStructure)
@@ -482,6 +544,10 @@ if (!window.sdlPopup) {
         const popupContent = state.popups.get(url);
         content.innerHTML = "";
 
+        // Clone the section-theme CSS into <head> so themed sections render
+        // with their correct colours while the popup is open.
+        injectThemeStyles(popupContent);
+
         if (selector) {
           const block = popupContent.querySelector(selector);
           if (block) {
@@ -495,9 +561,17 @@ if (!window.sdlPopup) {
             throw new Error(`Selector "${selector}" not found in the content.`);
           }
         } else {
-          while (popupContent.firstChild) {
-            content.appendChild(popupContent.firstChild);
-          }
+          // Move every child EXCEPT the section-theme <style> (kept in the cache
+          // so it survives reopen; it is injected into <head> separately above).
+          Array.from(popupContent.childNodes).forEach(child => {
+            if (
+              child.nodeType === 1 &&
+              child.classList.contains("sdl-popup-section-themes")
+            ) {
+              return;
+            }
+            content.appendChild(child);
+          });
           state.currentSelector = null;
           state.originalParent = popupContent;
           state.originalNextSibling = null;
@@ -544,6 +618,23 @@ if (!window.sdlPopup) {
       container.style.display = "block";
       loadAllImages(content);
       queueLayoutRefresh();
+    }
+
+    /* Clone the fetched page's section-theme <style> into <head> while open. */
+    function injectThemeStyles(popupContent) {
+      removeThemeStyles();
+      const styleEl = popupContent.querySelector(".sdl-popup-section-themes");
+      if (styleEl) {
+        state.themeStyleEl = styleEl.cloneNode(true);
+        document.head.appendChild(state.themeStyleEl);
+      }
+    }
+
+    function removeThemeStyles() {
+      if (state.themeStyleEl) {
+        state.themeStyleEl.remove();
+        state.themeStyleEl = null;
+      }
     }
 
     /* --------------------------------------------------------------------
@@ -629,6 +720,7 @@ if (!window.sdlPopup) {
         container.scrollTop = 0;
         container.scrollLeft = 0;
 
+        removeThemeStyles();
         overlay.style.display = "none";
         state.activePopup = null;
         state.currentSelector = null;
