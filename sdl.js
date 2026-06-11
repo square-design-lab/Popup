@@ -409,14 +409,329 @@ window.sdl$ = (function (existing) {
     return temp.firstChild;
   }
 
+  /* ======================================================================
+     ADDITIONAL CONTENT METHODS — ported from plugin-lightbox.js so this
+     reference covers ALL the ways the lightbox pulls content (images,
+     external pages/iframes, video embeds), plus its cache/theme/cleanup
+     helpers. popup.js only bundles the internal-page subset; these extend
+     the reference to "all kinds of content".
+  ====================================================================== */
+
+  /* ----------------------------------------------------------------------
+     detectSourceType — classify a target the way get-link-data does.
+
+     Returns { sourceType, type, url }:
+       embed-video / video   → YouTube · Vimeo · Loom · Wistia URL
+       image / image         → external image URL (.jpg/.jpeg/.png/.gif)
+       iframe / iframe        → any other external http(s) URL
+       page / inline          → internal site path (default)
+  ---------------------------------------------------------------------- */
+  function detectSourceType(target) {
+    const a = String(target || "");
+    let sourceType = "page";
+    let type = "inline";
+    if (a.match(/^http/) && a.match(/(youtu\.be|youtube\.com|vimeo\.com|loom\.com|wistia\.com\/medias\/)/)) {
+      sourceType = "embed-video";
+      type = "video";
+    } else if (a.match(/^http.*(\.jpg|\.jpeg|\.png|\.gif)(\?format=[0-9]{1,}w)?((\?|&)group=[a-z0-9-]{3,})?$/i)) {
+      sourceType = "image";
+      type = "image";
+    } else if (a.match(/^http/)) {
+      sourceType = "iframe";
+      type = "iframe";
+    }
+    return { sourceType, type, url: a };
+  }
+
+  /* ----------------------------------------------------------------------
+     imageUrlFullRes — request a Squarespace image at a larger render size
+     (the lightbox opens images at ?format=2500w).
+  ---------------------------------------------------------------------- */
+  function imageUrlFullRes(url, width = 2500) {
+    if (!url) return url;
+    const base = url.split("?")[0];
+    return `${base}?format=${width}w`;
+  }
+
+  /* ----------------------------------------------------------------------
+     videoEmbedUrl — turn a share URL into an embeddable iframe src.
+  ---------------------------------------------------------------------- */
+  function videoEmbedUrl(url, autoplay = true) {
+    if (!url) return url;
+    const ap = autoplay ? "1" : "0";
+    let m;
+    if ((m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([\w-]+)/))) {
+      return `https://www.youtube.com/embed/${m[1]}?autoplay=${ap}&rel=0`;
+    }
+    if ((m = url.match(/vimeo\.com\/(?:video\/)?(\d+)/))) {
+      return `https://player.vimeo.com/video/${m[1]}?autoplay=${ap}`;
+    }
+    if ((m = url.match(/loom\.com\/(?:share|embed)\/([\w-]+)/))) {
+      return `https://www.loom.com/embed/${m[1]}?autoplay=${ap}`;
+    }
+    if ((m = url.match(/wistia\.com\/medias\/([\w-]+)/))) {
+      return `https://fast.wistia.net/embed/iframe/${m[1]}?autoPlay=${ap}`;
+    }
+    return url;
+  }
+
+  /* ----------------------------------------------------------------------
+     resolveContent — pull ANY supported source into a ready DOM node.
+
+     "/about#team"                  → the #team section (internal page)
+     "https://…/photo.png"          → <img> at full resolution
+     "https://youtu.be/XYZ"         → <iframe> video embed
+     "https://example.com"          → <iframe> of the external page
+  ---------------------------------------------------------------------- */
+  async function resolveContent(target, opts = {}) {
+    const { sourceType } = detectSourceType(target);
+
+    if (sourceType === "image") {
+      const img = document.createElement("img");
+      img.src = imageUrlFullRes(target, opts.imageWidth || 2500);
+      img.className = "sdl-content-image";
+      return img;
+    }
+    if (sourceType === "embed-video" || sourceType === "iframe") {
+      const iframe = document.createElement("iframe");
+      iframe.src =
+        sourceType === "embed-video" ? videoEmbedUrl(target, opts.autoplay !== false) : target;
+      iframe.setAttribute("frameborder", "0");
+      iframe.setAttribute("allow", "autoplay; fullscreen; picture-in-picture");
+      iframe.setAttribute("allowfullscreen", "");
+      iframe.className = "sdl-content-iframe";
+      return iframe;
+    }
+    // internal page / section / block
+    return getPageContent(target);
+  }
+
+  /* ----------------------------------------------------------------------
+     fetchWithCache — fetch a page fragment with a stale-while-revalidate
+     localStorage cache (the lightbox's fetch-data localCache). Returns the
+     extracted node; serves cached HTML instantly and refreshes in the
+     background once the cache passes `expiresMinutes`.
+  ---------------------------------------------------------------------- */
+  async function fetchWithCache(url, selector = "#sections", opts = {}) {
+    const expiresMinutes = opts.expiresMinutes ?? 5;
+    const key = `sdl-cache:${url}:${selector}`;
+    const keyExp = `${key}:expires`;
+    const readCache = () => {
+      try { return localStorage.getItem(key); } catch (e) { return null; }
+    };
+    const writeCache = html => {
+      try {
+        localStorage.setItem(key, html);
+        localStorage.setItem(keyExp, String(Date.now() + expiresMinutes * 60 * 1000));
+      } catch (e) {}
+    };
+    const isExpired = () => {
+      const t = parseInt(localStorage.getItem(keyExp) || "0", 10);
+      return !t || t <= Date.now();
+    };
+    const toNode = html => {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const found = doc.querySelector(selector) || doc.body;
+      return document.importNode(found, true);
+    };
+    const fetchFresh = async () => {
+      const u = url + (url.includes("?") ? "&" : "?") + "format=html";
+      const res = await fetch(u, { credentials: "same-origin", cache: "no-store" });
+      if (res.status !== 200) throw new Error(`Fetch Error: ${res.status}`);
+      const html = await res.text();
+      writeCache(html);
+      return html;
+    };
+
+    const cached = readCache();
+    if (cached) {
+      if (isExpired()) fetchFresh().catch(console.error); // revalidate in background
+      return toNode(cached);
+    }
+    return toNode(await fetchFresh());
+  }
+
+  /* ----------------------------------------------------------------------
+     copyThemeContext — copy the source page's collection-type + matching
+     tweak classes onto a wrapper so injected content inherits theming
+     (get-page-content does this for cross-template correctness).
+  ---------------------------------------------------------------------- */
+  function bodyClassMatch(doc, regex) {
+    const body = doc.querySelector("body");
+    if (!body) return "";
+    const cls = [...body.classList];
+    const i = cls.findIndex(c => c.match(regex));
+    return i >= 0 ? cls[i] : "";
+  }
+
+  function copyThemeContext(wrapper, doc) {
+    const collection = (bodyClassMatch(doc, /^collection-type-/) || "none").replace(
+      "collection-type-",
+      ""
+    );
+    const tweakRe = new RegExp("^(tweak-|)" + collection);
+    const classes = ["collection-type-" + collection];
+    if (doc.querySelector(".view-list")) classes.push("view-list");
+    if (doc.querySelector(".view-item")) classes.push("view-item");
+    document.body.className
+      .split(/\s+/)
+      .filter(c => tweakRe.test(c))
+      .forEach(c => classes.push(c));
+    wrapper.className = (wrapper.className + " " + classes.join(" ")).replace(/\s+/g, " ").trim();
+    return wrapper;
+  }
+
+  /* ----------------------------------------------------------------------
+     refreshImages — nudge Squarespace images to re-measure after injection
+     (utils/refresh-images: Y image .refresh(), else a resize event).
+  ---------------------------------------------------------------------- */
+  function refreshImages() {
+    setTimeout(() => {
+      if (window.Y) {
+        safe(() => window.Y.all("img").each(img => img.refresh && img.refresh()));
+      } else {
+        window.dispatchEvent(new Event("resize"));
+      }
+    }, 10);
+  }
+
+  /* ----------------------------------------------------------------------
+     removeAttributes — strip every attribute from an element except `keep`
+     (utils/remove-attributes; the lightbox uses it to clean .sqs-layout).
+  ---------------------------------------------------------------------- */
+  function removeAttributes(el, keep = []) {
+    if (!el) return;
+    for (let i = el.attributes.length - 1; i >= 0; i--) {
+      const name = el.attributes[i].name;
+      if (!keep.includes(name)) el.removeAttribute(name);
+    }
+  }
+
+  /* ----------------------------------------------------------------------
+     pauseEmbeddedVideos / resumeEmbeddedVideos — stop autoplay iframes when
+     content is hidden and restore them when shown (the lightbox's C()).
+     Removing an iframe's src (and re-cloning) is the only reliable way to
+     stop YouTube/Vimeo playback.
+  ---------------------------------------------------------------------- */
+  function toggleEmbeddedVideos(scope, action) {
+    if (!scope) return;
+    scope
+      .querySelectorAll('iframe[src*="autoplay"], iframe[data-src*="autoplay"]')
+      .forEach(el => {
+        if (!el.getAttribute("data-src")) el.setAttribute("data-src", el.getAttribute("src"));
+        if (action === "open") {
+          el.setAttribute("src", el.getAttribute("data-src"));
+        } else {
+          el.removeAttribute("src");
+          const clone = el.cloneNode();
+          el.parentNode.insertBefore(clone, el);
+          el.parentNode.removeChild(el);
+        }
+      });
+  }
+  const resumeEmbeddedVideos = scope => toggleEmbeddedVideos(scope, "open");
+  const pauseEmbeddedVideos = scope => toggleEmbeddedVideos(scope, "close");
+
+  /* ----------------------------------------------------------------------
+     imageBlockToLightbox — convert an image block into a full-res lightbox
+     link + caption (replace-block-image-lightbox). Squarespace stores the
+     caption in the img alt as "title _TD_ description".
+  ---------------------------------------------------------------------- */
+  function imageBlockToLightbox(block, opts = {}) {
+    if (!block) return null;
+    const img = block.querySelector("img[data-src], img");
+    if (!img) return null;
+    const src = img.getAttribute("src") || imageUrlFullRes(img.getAttribute("data-src"));
+    const link = document.createElement("a");
+    link.setAttribute("href", "#lightbox>" + src);
+    const altParts = (img.getAttribute("alt") || "").split(" _TD_ ");
+    const title = block.getAttribute("data-title") || altParts[0] || "";
+    const desc = block.getAttribute("data-description") || altParts[1] || "";
+    if (!opts.hideCaption && (title || desc)) {
+      const caption =
+        (title.match(/(\.jpg|\.jpeg|\.png|\.gif)$/i) || desc.indexOf(title) !== -1
+          ? ""
+          : `<h3>${title}</h3>`) + (desc || "");
+      link.setAttribute("data-caption", caption);
+    }
+    img.parentNode.appendChild(link);
+    img.parentNode.classList.add("lightbox-link-wrapper");
+    link.appendChild(img.cloneNode());
+    link.addEventListener("click", e => e.stopPropagation());
+    return link;
+  }
+
+  /* ----------------------------------------------------------------------
+     reinitializeGallery — re-init a collection-type-gallery pulled into the
+     page (replace-gallery-lightbox rebuilds the slideshow; this calls
+     Squarespace's gallery/layout initializers, which is enough in-popup).
+  ---------------------------------------------------------------------- */
+  function reinitializeGallery(scope) {
+    const Y = window.Y;
+    const Sqs = window.Squarespace;
+    if (!scope || !Y || !Sqs) return;
+    const galleries = scope.querySelectorAll(
+      ".sqs-gallery-block, .collection-type-gallery, .sqs-block-gallery"
+    );
+    if (!galleries.length) return;
+    const node = Y.one(scope);
+    safe(() => Sqs.initializeLayoutBlocks && Sqs.initializeLayoutBlocks(Y, node));
+    safe(() => Sqs.initializeGalleryBlock && Sqs.initializeGalleryBlock(Y, node));
+    safe(() => window.dispatchEvent(new Event("resize")));
+  }
+
+  /* ----------------------------------------------------------------------
+     isBackend — true inside the Squarespace editor (skip running there).
+  ---------------------------------------------------------------------- */
+  function isBackend() {
+    try {
+      return window.parent.Static && window.parent.Static.IN_BACKEND === true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* ----------------------------------------------------------------------
+     onAjaxLoaded — run a callback after Squarespace's AJAX page load (or
+     immediately on a normal load). Mirrors utils/ajax-loaded: watches the
+     body[data-ajax-loader] attribute, else the mercury:load event.
+  ---------------------------------------------------------------------- */
+  function onAjaxLoaded(callback) {
+    const body = document.querySelector("body[data-ajax-loader]");
+    if (body) {
+      const observer = new MutationObserver(mutations => {
+        if (
+          mutations[0].attributeName === "data-ajax-loader" &&
+          body.getAttribute("data-ajax-loader") === "loaded"
+        ) {
+          callback();
+        }
+      });
+      observer.observe(body, { attributes: true });
+    } else if (document.readyState !== "loading") {
+      window.addEventListener("mercury:load", callback);
+      callback();
+    } else {
+      window.addEventListener("mercury:load", callback);
+      document.addEventListener("DOMContentLoaded", callback);
+    }
+  }
+
   /* ---------------------------------------------------------------------- */
   return {
     // merging
     deepMerge: existing.deepMerge || deepMerge,
     // pulling content
     parseTarget: existing.parseTarget || parseTarget,
+    detectSourceType: existing.detectSourceType || detectSourceType,
     getFragment: existing.getFragment || getFragment,
     getPageContent: existing.getPageContent || getPageContent,
+    resolveContent: existing.resolveContent || resolveContent,
+    fetchWithCache: existing.fetchWithCache || fetchWithCache,
+    imageUrlFullRes: existing.imageUrlFullRes || imageUrlFullRes,
+    videoEmbedUrl: existing.videoEmbedUrl || videoEmbedUrl,
+    imageBlockToLightbox: existing.imageBlockToLightbox || imageBlockToLightbox,
+    copyThemeContext: existing.copyThemeContext || copyThemeContext,
     // initializing pulled content
     executeScripts: existing.executeScripts || executeScripts,
     loadImages: existing.loadImages || loadImages,
@@ -428,6 +743,14 @@ window.sdl$ = (function (existing) {
     initializeThirdPartyPlugins: existing.initializeThirdPartyPlugins || initializeThirdPartyPlugins,
     initializeAllPlugins: existing.initializeAllPlugins || initializeAllPlugins,
     initializeContent: existing.initializeContent || initializeContent,
+    reinitializeGallery: existing.reinitializeGallery || reinitializeGallery,
+    // media + content helpers
+    refreshImages: existing.refreshImages || refreshImages,
+    removeAttributes: existing.removeAttributes || removeAttributes,
+    pauseEmbeddedVideos: existing.pauseEmbeddedVideos || pauseEmbeddedVideos,
+    resumeEmbeddedVideos: existing.resumeEmbeddedVideos || resumeEmbeddedVideos,
+    isBackend: existing.isBackend || isBackend,
+    onAjaxLoaded: existing.onAjaxLoaded || onAjaxLoaded,
     // optional plugin registry
     registeredPlugins: existing.registeredPlugins || [],
   };
