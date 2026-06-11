@@ -600,12 +600,17 @@ if (!window.sdlPopup) {
       if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeSummaryV2Block) {
         Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
       }
+      // Render Vimeo/YouTube/Wistia video embeds from their data-html (must run
+      // BEFORE reinitializeForms so the failed 7.1 video component is neutralized
+      // before Squarespace tries to hydrate it).
+      renderVideoEmbeds(content);
+
       // Re-wire form blocks now that the content lives in its final location
       // in the popup (forms initialized in the temp container don't survive
       // being moved — especially reCAPTCHA).
       sdl$.reinitializeForms(content);
       startVideos(content);       // restore embeds blanked on a previous close
-      autoplayVideos(content);    // play the popup's video (incl. 7.1 components)
+      autoplayVideos(content);    // play the popup's native video
 
       // Notify the Will-Myers video ecosystem (VideoElement etc.) so any of its
       // players inside the popup initialize/observe now that it is visible.
@@ -900,6 +905,46 @@ if (!window.sdlPopup) {
           f.removeAttribute("src");
         }
       });
+    }
+
+    /* Render Squarespace Vimeo/YouTube/Wistia video embeds from their
+       `.sqs-video-wrapper[data-html]` markup.
+
+       7.1 video blocks are React "website components", but their visitor module
+       (`website.components.video.visitor`) can't load inside AJAX-injected
+       content ("Amd Module cannot be loaded … missing import map"), so the
+       player never renders. We render the embed ourselves from the data-html
+       the server already provides, and strip the component's hydration marker
+       so Squarespace doesn't try (and fail) to mount it — which also clears
+       that console error. */
+    function renderVideoEmbeds(scope) {
+      if (!scope) return;
+      scope.querySelectorAll(".sqs-video-wrapper[data-html]").forEach(wrap => {
+        const component = wrap.closest("[data-website-component-id]");
+        if (component) component.removeAttribute("data-website-component-id");
+
+        if (wrap.querySelector("iframe")) return; // already rendered
+        const html = wrap.getAttribute("data-html");
+        if (!html) return;
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        const iframe = tmp.querySelector("iframe");
+        if (!iframe) return;
+        if (settings.autoplayVideo) {
+          iframe.setAttribute("src", addEmbedAutoplay(iframe.getAttribute("src")));
+        }
+        wrap.appendChild(iframe);
+      });
+    }
+
+    // Append the provider's autoplay (+ muted, required post-gesture) params.
+    function addEmbedAutoplay(src) {
+      if (!src) return src;
+      const sep = src.includes("?") ? "&" : "?";
+      if (/youtube\.com|youtu\.be/.test(src)) return src + sep + "autoplay=1&mute=1";
+      if (/vimeo\.com/.test(src)) return src + sep + "autoplay=1&muted=1";
+      if (/wistia/.test(src)) return src + sep + "autoplay=1&muted=1";
+      return src + sep + "autoplay=1";
     }
 
     function startVideos(scope) {

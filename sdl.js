@@ -680,6 +680,43 @@ window.sdl$ = (function (existing) {
     return () => { cancelled = true; };
   }
 
+  /* Render Squarespace Vimeo/YouTube/Wistia video embeds from their
+     `.sqs-video-wrapper[data-html]` markup.
+
+     7.1 video blocks are React "website components" whose visitor module
+     (`website.components.video.visitor`) fails to load inside AJAX-injected
+     content ("Amd Module cannot be loaded … missing import map"), so the player
+     never renders. This builds the embed iframe from the server-provided
+     data-html and strips the component's hydration marker so Squarespace does
+     not try (and fail) to mount it — which also clears that console error.
+
+     With opts.autoplay, the provider's autoplay (+muted, required once the
+     click gesture has expired) params are appended. */
+  function renderVideoEmbeds(scope, opts = {}) {
+    if (!scope) return;
+    const withAutoplay = src => {
+      if (!opts.autoplay || !src) return src;
+      const sep = src.includes("?") ? "&" : "?";
+      if (/youtube\.com|youtu\.be/.test(src)) return src + sep + "autoplay=1&mute=1";
+      if (/vimeo\.com/.test(src)) return src + sep + "autoplay=1&muted=1";
+      if (/wistia/.test(src)) return src + sep + "autoplay=1&muted=1";
+      return src + sep + "autoplay=1";
+    };
+    scope.querySelectorAll(".sqs-video-wrapper[data-html]").forEach(wrap => {
+      const component = wrap.closest("[data-website-component-id]");
+      if (component) component.removeAttribute("data-website-component-id");
+      if (wrap.querySelector("iframe")) return;
+      const html = wrap.getAttribute("data-html");
+      if (!html) return;
+      const tmp = document.createElement("div");
+      tmp.innerHTML = html;
+      const iframe = tmp.querySelector("iframe");
+      if (!iframe) return;
+      iframe.setAttribute("src", withAutoplay(iframe.getAttribute("src")));
+      wrap.appendChild(iframe);
+    });
+  }
+
   /* Stop + rewind native <video> elements (pair with pauseEmbeddedVideos). */
   function resetNativeVideos(scope) {
     if (!scope) return;
@@ -688,11 +725,11 @@ window.sdl$ = (function (existing) {
     });
   }
 
-  /* Fire the Will-Myers video-ecosystem events (VideoElement, willmyers popup).
+  /* Fire the video-ecosystem events.
      dispatch("open") on show → players (re)initialize/observe;
      dispatch("close") on hide → players pause. */
   function notifyVideoEcosystem(phase) {
-    const name = phase === "close" ? "wmPopupClosed" : "wMPopupBuilt";
+    const name = phase === "close" ? "sdlPopupClosed" : "sdlPopupBuilt";
     try { window.dispatchEvent(new Event(name)); } catch (e) {}
   }
 
@@ -814,6 +851,7 @@ window.sdl$ = (function (existing) {
     pauseEmbeddedVideos: existing.pauseEmbeddedVideos || pauseEmbeddedVideos,
     resumeEmbeddedVideos: existing.resumeEmbeddedVideos || resumeEmbeddedVideos,
     autoplayVideos: existing.autoplayVideos || autoplayVideos,
+    renderVideoEmbeds: existing.renderVideoEmbeds || renderVideoEmbeds,
     resetNativeVideos: existing.resetNativeVideos || resetNativeVideos,
     notifyVideoEcosystem: existing.notifyVideoEcosystem || notifyVideoEcosystem,
     isBackend: existing.isBackend || isBackend,

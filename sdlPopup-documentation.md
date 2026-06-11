@@ -96,6 +96,8 @@ The target is auto-classified:
 
 When a popup opens, its video **auto-plays** (set `autoplayVideo: false` to disable). This works for a video nested anywhere in the pulled content — not just a single video-only popup — and for Squarespace 7.1 "website component" video blocks, whose player (Plyr) only appears after asynchronous hydration. A short retry loop waits for the player to mount, then plays it.
 
+**Vimeo / YouTube / Wistia video blocks** added through Squarespace's video block render from the embed markup the server provides (`.sqs-video-wrapper[data-html]`). The 7.1 video component's hydration script can't load inside injected content (it would log `Amd Module cannot be loaded … website.components.video.visitor`), so the plugin renders the embed iframe itself and removes the component's hydration marker — which makes the video appear **and** clears that console error. Embedded players autoplay muted (with `autoplayVideo`); use the player's own controls to unmute.
+
 **Sound:**
 
 - **External video embeds** (`#sdl-popup=https://youtu.be/…`, Vimeo, Loom, Wistia) autoplay **with sound**. They are `<iframe>` embeds built synchronously inside the click gesture (`?autoplay=1`, no mute), so the browser permits sound — exactly like a dedicated video-lightbox plugin.
