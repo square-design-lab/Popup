@@ -1,0 +1,8 @@
+# Internal source spec — not part of the distributed plugin
+plugin.js
+plugin.css
+
+# Local tooling / OS files
+.claude/
+.DS_Store
+Thumbs.db
