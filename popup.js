@@ -611,6 +611,10 @@ if (!window.sdlPopup) {
       sdl$.reinitializeForms(content);
       startVideos(content);       // restore embeds blanked on a previous close
       autoplayVideos(content);    // play the popup's native video
+      // Arm unmute for embed iframes even when there is no native <video>.
+      // autoplayVideos already arms it if video.muted; this is a no-op then
+      // (state.unmuteHandler guard), but catches embed-only popups.
+      armUnmuteOnInteraction(content);
 
       // Notify the Will-Myers video ecosystem (VideoElement etc.) so any of its
       // players inside the popup initialize/observe now that it is visible.
@@ -931,7 +935,10 @@ if (!window.sdlPopup) {
         const iframe = tmp.querySelector("iframe");
         if (!iframe) return;
         if (settings.autoplayVideo) {
-          iframe.setAttribute("src", addEmbedAutoplay(iframe.getAttribute("src")));
+          const src = addEmbedAutoplay(iframe.getAttribute("src"));
+          iframe.setAttribute("src", src);
+          // Store so armUnmuteOnInteraction can reload inside a user gesture.
+          iframe.setAttribute("data-sdl-embed-src", src);
         }
         wrap.appendChild(iframe);
       });
@@ -1034,14 +1041,33 @@ if (!window.sdlPopup) {
       pump();
     }
 
-    /* Unmute an autoplayed (muted) video on the viewer's first interaction with
-       the popup — a real user gesture, which the browser allows to enable
-       sound. Native player controls (Plyr) remain available regardless. */
+    /* Unmute on the viewer's first interaction with the popup.
+
+       For native <video> (Plyr): sets muted=false inside the gesture so the
+       browser allows sound.
+
+       For Vimeo/YouTube embed iframes (data-sdl-embed-src): reloads the iframe
+       src inside the gesture. Setting an iframe src inside a direct user gesture
+       counts as in-gesture for the browser's autoplay policy, so the reloaded
+       player can autoplay with sound — unlike the original load which happened
+       after an async fetch (gesture expired). */
     function armUnmuteOnInteraction(scope) {
       if (!settings.unmuteOnInteraction || state.unmuteHandler) return;
+
+      const hasEmbeds = scope.querySelectorAll("iframe[data-sdl-embed-src]").length > 0;
+      const hasVideo = scope.querySelectorAll("video").length > 0;
+      if (!hasEmbeds && !hasVideo) return;
+
       const handler = () => {
+        // Native video: just unmute
         scope.querySelectorAll("video").forEach(v => {
           try { v.muted = false; if (v.paused) v.play().catch(() => {}); } catch (e) {}
+        });
+        // Embed iframes: reload src inside this gesture → browser allows sound
+        scope.querySelectorAll("iframe[data-sdl-embed-src]").forEach(f => {
+          const src = f.getAttribute("data-sdl-embed-src");
+          f.removeAttribute("src");
+          requestAnimationFrame(() => f.setAttribute("src", src));
         });
         teardownUnmute();
       };
