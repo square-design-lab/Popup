@@ -345,6 +345,7 @@ if (!window.sdlPopup) {
 
     const state = {
       popups: new Map(),
+      pendingFetches: new Map(), // url -> Promise; prefetch-on-hover in-flight requests
       activePopup: null,
       currentSelector: null,
       originalParent: null,
@@ -497,6 +498,10 @@ if (!window.sdlPopup) {
     -------------------------------------------------------------------- */
     function bindEvents() {
       document.body.addEventListener("click", handleLinkClick);
+      // Prefetch page content when the user hovers/touches a trigger link so
+      // the fetch+init is already done (or nearly done) by the time they click.
+      document.body.addEventListener("mouseenter", handleTriggerPrefetch, true);
+      document.body.addEventListener("touchstart", handleTriggerPrefetch, { passive: true, capture: true });
       closeButton.addEventListener("click", closePopup);
 
       if (settings.closeOnOverlayClick) {
@@ -548,6 +553,33 @@ if (!window.sdlPopup) {
       return { url, selector };
     }
 
+    /* Start fetching a page-type popup target the moment the user's pointer
+       enters its trigger link. Squarespace page fetches take 300–800 ms; hover
+       gives us that head-start so the content is cached before the click fires.
+       Media targets (video URLs, images, external pages) need no prefetch. */
+    function handleTriggerPrefetch(e) {
+      const link = e.target.closest(
+        'a[href^="#sdl-popup="], a[href^="#sdlpopup="], a[href^="/#sdl-popup="], a[href^="/#sdlpopup="]'
+      );
+      if (!link) return;
+
+      const target = stripPrefix(link.getAttribute("href"));
+      if (sdl$.detectSourceType(target) !== "page") return;
+
+      const { url } = parsePageTarget(target);
+      if (!url || state.popups.has(url) || state.pendingFetches.has(url)) return;
+
+      const promise = sdl$.getFragment(url, "#sections")
+        .then(fragment => initializeContent(fragment))
+        .then(initialized => {
+          state.popups.set(url, initialized);
+          state.pendingFetches.delete(url);
+        })
+        .catch(() => state.pendingFetches.delete(url));
+
+      state.pendingFetches.set(url, promise);
+    }
+
     async function handleLinkClick(e) {
       const link = e.target.closest(
         'a[href^="#sdl-popup="], a[href^="#sdlpopup="], a[href^="/#sdl-popup="], a[href^="/#sdlpopup="]'
@@ -595,21 +627,26 @@ if (!window.sdlPopup) {
 
     // Reveal the content and run all post-open initializers.
     function finishOverlay(key, detail) {
-      showPopupContent();
       state.activePopup = key;
+
+      // Render Vimeo/YouTube/Wistia embeds and restore blanked iframes BEFORE
+      // making the content visible — they start loading during the fade-in
+      // transition so the player is further along when the user first sees it.
+      // renderVideoEmbeds MUST run before reinitializeForms so the 7.1 video
+      // component's hydration marker is stripped before Squarespace tries to
+      // mount it (which would throw an AMD console error).
+      renderVideoEmbeds(content);
+      startVideos(content);
+
+      showPopupContent();
+
       if (typeof Squarespace !== "undefined" && typeof Y !== "undefined" && Squarespace.initializeSummaryV2Block) {
         Squarespace.initializeSummaryV2Block(Y, Y.one(overlay));
       }
-      // Render Vimeo/YouTube/Wistia video embeds from their data-html (must run
-      // BEFORE reinitializeForms so the failed 7.1 video component is neutralized
-      // before Squarespace tries to hydrate it).
-      renderVideoEmbeds(content);
-
       // Re-wire form blocks now that the content lives in its final location
       // in the popup (forms initialized in the temp container don't survive
       // being moved — especially reCAPTCHA).
       sdl$.reinitializeForms(content);
-      startVideos(content);       // restore embeds blanked on a previous close
       autoplayVideos(content);    // play the popup's native video
       // Arm unmute for embed iframes even when there is no native <video>.
       // autoplayVideos already arms it if video.muted; this is a no-op then
@@ -641,9 +678,18 @@ if (!window.sdlPopup) {
 
       try {
         if (!state.popups.has(url)) {
-          const fragment = await sdl$.getFragment(url, "#sections");
-          const initialized = await initializeContent(fragment);
-          state.popups.set(url, initialized);
+          // If a hover-prefetch is already in flight, join it instead of
+          // firing a second fetch for the same URL.
+          if (state.pendingFetches.has(url)) {
+            await state.pendingFetches.get(url);
+          }
+          // Prefetch may not have finished (or hover never fired — e.g. touch
+          // devices that don't emit mouseenter). Fetch now if still needed.
+          if (!state.popups.has(url)) {
+            const fragment = await sdl$.getFragment(url, "#sections");
+            const initialized = await initializeContent(fragment);
+            state.popups.set(url, initialized);
+          }
         }
 
         const popupContent = state.popups.get(url);
