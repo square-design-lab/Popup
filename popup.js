@@ -937,13 +937,15 @@ if (!window.sdlPopup) {
       });
     }
 
-    // Append the provider's autoplay (+ muted, required post-gesture) params.
+    // Append the provider's autoplay params.
+    // No muted flag — the user clicked to open the popup so the browser considers
+    // the domain interacted with and permits autoplay with sound.
     function addEmbedAutoplay(src) {
       if (!src) return src;
       const sep = src.includes("?") ? "&" : "?";
-      if (/youtube\.com|youtu\.be/.test(src)) return src + sep + "autoplay=1&mute=1";
-      if (/vimeo\.com/.test(src)) return src + sep + "autoplay=1&muted=1";
-      if (/wistia/.test(src)) return src + sep + "autoplay=1&muted=1";
+      if (/youtube\.com|youtu\.be/.test(src)) return src + sep + "autoplay=1";
+      if (/vimeo\.com/.test(src)) return src + sep + "autoplay=1";
+      if (/wistia/.test(src)) return src + sep + "autoplay=1";
       return src + sep + "autoplay=1";
     }
 
@@ -987,12 +989,13 @@ if (!window.sdlPopup) {
        — so we retry on a short poll until it mounts.
 
        NOTE on sound:
-       - External YouTube/Vimeo/Loom/Wistia popups are <iframe> embeds built
-         synchronously inside the click gesture, so they autoplay WITH sound
-         (handled in openMedia, not here).
-       - A native <video> only exists after async hydration, by which point the
-         click gesture has expired, so the browser only permits MUTED autoplay.
-         `unmuteOnInteraction` then unmutes it on the viewer's first click/tap. */
+       - External YouTube/Vimeo/Loom/Wistia popups (direct URL triggers) autoplay
+         WITH sound — handled in openMedia, not here.
+       - Vimeo/YouTube video BLOCKS inside pulled page content use addEmbedAutoplay
+         (no muted flag) so they also try to autoplay with sound.
+       - A native <video> (Plyr) only exists after async hydration. We try to play
+         without muting first; if the browser blocks it we fall back to muted, then
+         `unmuteOnInteraction` unmutes on the viewer's first click/tap. */
     function autoplayVideos(scope) {
       if (!settings.autoplayVideo || !scope) return;
 
