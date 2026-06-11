@@ -94,50 +94,49 @@ if (!window.sdlPopup) {
             safe(() => Sqs.initializeCommentLink && Sqs.initializeCommentLink(Y, node));
             safe(() => Sqs.initializeParallax && Sqs.initializeParallax(Y, node));
           }
-          reinitializeForms(el);
+          // NOTE: form blocks are intentionally NOT initialized here. This runs
+          // on the detached/temp container; React form components must be
+          // hydrated in their final location (see reinitializeForms call after
+          // the popup opens) or they break when the DOM is moved.
           loadImages(el);
           safe(() => window.dispatchEvent(new Event("resize")));
           requestAnimationFrame(() => resolve());
         });
       }
 
-      /* (Re)initialize Squarespace Form Blocks inside a container.
+      /* (Re)initialize Squarespace form blocks inside a container.
+
          Needed because the page's form controller only runs once on load and
-         never sees AJAX-injected forms. Tries the documented Squarespace
-         initializers, then falls back to the YUI form-rendering utility, and
-         finally re-executes any inline form bootstrap scripts. All guarded. */
+         never sees AJAX-injected forms.
+
+         Squarespace 7.1 forms are React "website components" — they are
+         hydrated by `Squarespace.initializeWebsiteComponent`, NOT the legacy
+         `initializeFormBlocks` (whose own source explicitly skips
+         website-component forms). We call both so modern *and* classic forms
+         render. Both are existence-guarded. */
       function reinitializeForms(scope) {
         if (!scope) return;
         const Y = window.Y;
         const Sqs = window.Squarespace;
-        const forms = scope.querySelectorAll(".form-block, .sqs-block-form");
-        if (!forms.length || !Y) return;
+        if (!Y || !Sqs) return;
 
-        const node = Y.one ? Y.one(scope) : null;
-
-        // 1) Squarespace's own initializer(s) — method name varies by version.
-        if (Sqs && node) {
-          ["initializeFormBlocks", "initializeForms"].forEach(name => {
-            if (typeof Sqs[name] === "function") safe(() => Sqs[name](Y, node));
-          });
-        }
-
-        // 2) YUI form-rendering utility fallback (older / classic forms).
-        safe(() =>
-          Y.use && Y.use("squarespace-form-rendering-utils", function (Yi) {
-            const FRU = Yi.Squarespace && Yi.Squarespace.FormRenderingUtils;
-            if (!FRU) return;
-            forms.forEach(block => {
-              const b = Yi.one(block);
-              if (!b) return;
-              safe(() => FRU.renderForm && FRU.renderForm(b));
-              safe(() => FRU.initializePostFormSubmit && FRU.initializePostFormSubmit(b));
-            });
-          })
+        const hasComponentForm = scope.querySelector(
+          '[data-definition-name="website.components.form"], .sqs-block-website-component'
         );
+        const hasLegacyForm = scope.querySelector(
+          ".sqs-block-form, .form-block, .sqs-block-newsletter, .newsletter-block"
+        );
+        if (!hasComponentForm && !hasLegacyForm) return;
 
-        // 3) Re-execute any inline bootstrap scripts the form ships with.
-        forms.forEach(block => executeScripts(block));
+        // 7.1 website-component (React) forms. Scans the document and hydrates
+        // any unrendered form components — including freshly injected ones.
+        if (typeof Sqs.initializeWebsiteComponent === "function") {
+          safe(() => Sqs.initializeWebsiteComponent(Y));
+        }
+        // Legacy YUI form blocks (older sites). 2nd arg is the YUI app global.
+        if (typeof Sqs.initializeFormBlocks === "function") {
+          safe(() => Sqs.initializeFormBlocks(Y, Y));
+        }
       }
 
       /* Re-init any registered SDL plugins (optional global registry). */
